@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Golf Vibe Tempo Tracker</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#3B82F6">
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    <style>
+        @keyframes expand {
+            0% { transform: scale(1); opacity: 0.5; }
+            100% { transform: scale(3); opacity: 0; }
+        }
+        .visualizer-ring {
+            position: absolute; width: 100px; height: 100px;
+            border-radius: 50%; background: rgba(59, 130, 246, 0.5);
+            transition: all linear;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white min-h-screen flex flex-col items-center justify-center p-4 font-sans transition-colors duration-300">
+
+    <div class="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 relative overflow-hidden transition-colors duration-300">
+        
+        <div class="flex justify-between items-start mb-2">
+            <div>
+                <h1 class="text-3xl font-bold text-blue-600 dark:text-blue-400">Tempo Vibes</h1>
+                <p class="text-gray-500 dark:text-gray-400 text-sm">Session Swings: <span id="swing-counter" class="font-bold text-blue-600 dark:text-blue-400">0</span></p>
+            </div>
+            <button id="theme-toggle" class="p-2 bg-gray-200 dark:bg-gray-700 rounded-full text-xs font-bold uppercase tracking-wide">
+                ☀️ Outdoor
+            </button>
+        </div>
+
+        <div id="visualizer-container" class="h-40 w-full flex items-center justify-center relative my-6 bg-gray-200 dark:bg-gray-700 rounded-xl overflow-hidden">
+            <div id="core-circle" class="w-24 h-24 bg-blue-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100">
+                <span id="swing-state" class="font-bold text-xl text-white tracking-wider text-center px-2">READY</span>
+            </div>
+            <div id="ring" class="visualizer-ring hidden"></div>
+        </div>
+
+        <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Tempo</label>
+                    <select id="tempo-select" class="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="3">3:1 (Full)</option>
+                        <option value="2">2:1 (Short)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Vibe</label>
+                    <select id="vibe-select" class="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="speak_ernie">Ernie Els</option>
+                        <option value="speak_potato">One Potato</option>
+                        <option value="arcade">Arcade</option>
+                        <option value="zen">Zen</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <div class="flex justify-between mb-1">
+                    <label class="text-xs font-medium text-gray-600 dark:text-gray-300">Swing Speed</label>
+                    <span id="speed-display" class="text-xs text-blue-600 dark:text-blue-400 font-bold">1.2s</span>
+                </div>
+                <input type="range" id="speed-slider" min="0.8" max="2.0" step="0.1" value="1.2" class="w-full accent-blue-500">
+            </div>
+
+            <hr class="border-gray-300 dark:border-gray-600 my-2">
+
+            <div class="flex items-center justify-between mb-2">
+                <label class="text-sm font-medium text-blue-600 dark:text-blue-300">Enable Auto-Loop</label>
+                <input type="checkbox" id="loop-toggle" class="w-5 h-5 accent-blue-500 rounded">
+            </div>
+
+            <div id="delay-container" class="opacity-50 pointer-events-none transition-opacity">
+                <div class="flex justify-between mb-1">
+                    <label class="text-xs font-medium text-gray-500 dark:text-gray-400">Setup Delay Between Swings</label>
+                    <span id="delay-display" class="text-xs text-blue-600 dark:text-blue-400 font-bold">8s</span>
+                </div>
+                <input type="range" id="delay-slider" min="3" max="20" step="1" value="8" class="w-full accent-blue-500">
+            </div>
+        </div>
+
+        <button id="play-btn" class="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition-colors text-lg uppercase tracking-widest">
+            START
+        </button>
+    </div>
+
+    <script>
+        // PWA Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW failed:', err));
+            });
+        }
+
+        let audioCtx;
+        const synth = window.speechSynthesis;
+
+        // UI Elements
+        const playBtn = document.getElementById('play-btn');
+        const tempoSelect = document.getElementById('tempo-select');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedDisplay = document.getElementById('speed-display');
+        const vibeSelect = document.getElementById('vibe-select');
+        const loopToggle = document.getElementById('loop-toggle');
+        const delaySlider = document.getElementById('delay-slider');
+        const delayDisplay = document.getElementById('delay-display');
+        const delayContainer = document.getElementById('delay-container');
+        
+        const coreCircle = document.getElementById('core-circle');
+        const swingStateText = document.getElementById('swing-state');
+        const ring = document.getElementById('ring');
+        const swingCounterDisplay = document.getElementById('swing-counter');
+        const themeToggle = document.getElementById('theme-toggle');
+
+        // State Variables
+        let isRunning = false;
+        let loopTimeoutId = null;
+        let countdownIntervalId = null;
+        let swingCount = 0;
+
+        // Theme Toggle Logic
+        themeToggle.addEventListener('click', () => {
+            document.documentElement.classList.toggle('dark');
+            if (document.documentElement.classList.contains('dark')) {
+                themeToggle.textContent = '☀️ Outdoor';
+            } else {
+                themeToggle.textContent = '🌙 Dark';
+            }
+        });
+
+        // UI Listeners
+        speedSlider.addEventListener('input', (e) => speedDisplay.textContent = `${e.target.value}s`);
+        delaySlider.addEventListener('input', (e) => delayDisplay.textContent = `${e.target.value}s`);
+        
+        loopToggle.addEventListener('change', (e) => {
+            if (e.target.checked) delayContainer.classList.remove('opacity-50', 'pointer-events-none');
+            else delayContainer.classList.add('opacity-50', 'pointer-events-none');
+        });
+
+        function playTone(freq, type, startTime, duration, isImpact = false) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, startTime);
+            if (isImpact && type === 'square') osc.frequency.exponentialRampToValueAtTime(freq / 2, startTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            gain.gain.setValueAtTime(0, startTime);
+            gain.gain.linearRampToValueAtTime(1, startTime + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+            osc.start(startTime);
+            osc.stop(startTime + duration);
+        }
+
+        function speakWord(word) {
+            if (!word) return;
+            synth.cancel(); 
+            const utterance = new SpeechSynthesisUtterance(word);
+            utterance.rate = 2.0; 
+            utterance.pitch = 1.2;
+            synth.speak(utterance);
+        }
+
+        function stopEngine() {
+            isRunning = false;
+            clearTimeout(loopTimeoutId);
+            clearInterval(countdownIntervalId);
+            synth.cancel();
+            
+            playBtn.textContent = "START";
+            playBtn.classList.replace('bg-red-600', 'bg-blue-600');
+            playBtn.classList.replace('hover:bg-red-700', 'hover:bg-blue-700');
+            
+            swingStateText.textContent = "READY";
+            coreCircle.style.transform = "scale(1)";
+            coreCircle.className = "w-24 h-24 bg-blue-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+            ring.classList.add('hidden');
+            ring.style.animation = "";
+        }
+
+        function startDelaySequence() {
+            if (!isRunning) return;
+            let timeLeft = parseInt(delaySlider.value);
+            swingStateText.textContent = `${timeLeft}s`;
+            coreCircle.className = "w-24 h-24 bg-gray-500 rounded-full z-10 flex items-center justify-center shadow-lg";
+
+            countdownIntervalId = setInterval(() => {
+                if (!isRunning) {
+                    clearInterval(countdownIntervalId);
+                    return;
+                }
+                timeLeft--;
+                
+                if (timeLeft > 0) {
+                    swingStateText.textContent = `${timeLeft}s`;
+                    if (timeLeft <= 3) {
+                        playTone(1000, 'sine', audioCtx.currentTime, 0.05);
+                    }
+                } else {
+                    clearInterval(countdownIntervalId);
+                    executeSwingSequence();
+                }
+            }, 1000);
+        }
+
+        function executeSwingSequence() {
+            if (!isRunning) return;
+
+            const totalTime = parseFloat(speedSlider.value);
+            const ratio = parseInt(tempoSelect.value); 
+            const vibe = vibeSelect.value;
+            const totalParts = ratio + 1;
+            const backswingDuration = totalTime * (ratio / totalParts);
+            const downswingDuration = totalTime * (1 / totalParts);
+
+            const now = audioCtx.currentTime;
+            const topOfSwingTime = now + backswingDuration;
+            const impactTime = topOfSwingTime + downswingDuration;
+
+            if (vibe.startsWith('speak_')) {
+                let w1, w2, w3;
+                if (vibe === 'speak_potato') { w1 = "One"; w2 = "Potato"; w3 = "Two"; }
+                else if (vibe === 'speak_marcy') { w1 = "Marcy"; w2 = "My"; w3 = "Dear"; }
+                else if (vibe === 'speak_ernie') { w1 = "Ernie"; w2 = ""; w3 = "Els"; }
+
+                speakWord(w1);
+                setTimeout(() => { if(isRunning) speakWord(w2) }, backswingDuration * 1000);
+                setTimeout(() => { if(isRunning) speakWord(w3) }, (backswingDuration + downswingDuration) * 1000);
+            } else {
+                if (vibe === 'arcade') {
+                    playTone(300, 'square', now, 0.4);
+                    playTone(450, 'square', topOfSwingTime, 0.4);
+                    playTone(150, 'square', impactTime, 0.6, true);
+                } else if (vibe === 'zen') {
+                    playTone(440, 'sine', now, 1.0);
+                    playTone(554.37, 'sine', topOfSwingTime, 1.0);
+                    playTone(329.63, 'sine', impactTime, 2.0);
+                }
+            }
+
+            swingStateText.textContent = "BACK";
+            coreCircle.style.transform = "scale(0.8)";
+            coreCircle.className = "w-24 h-24 bg-purple-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+
+            setTimeout(() => {
+                if (!isRunning) return;
+                swingStateText.textContent = "TOP";
+                coreCircle.style.transform = "scale(1.2)";
+                coreCircle.classList.replace('bg-purple-500', 'bg-yellow-500');
+            }, backswingDuration * 1000);
+
+            setTimeout(() => {
+                if (!isRunning) return;
+                swingStateText.textContent = "IMPACT!";
+                coreCircle.style.transform = "scale(1)";
+                coreCircle.classList.replace('bg-yellow-500', 'bg-green-500');
+                
+                ring.classList.remove('hidden');
+                ring.style.animation = "none";
+                void ring.offsetWidth; 
+                ring.style.animation = "expand 0.5s ease-out forwards";
+
+                swingCount++;
+                swingCounterDisplay.textContent = swingCount;
+
+                if (loopToggle.checked && isRunning) {
+                    loopTimeoutId = setTimeout(startDelaySequence, 1000); 
+                } else if (!loopToggle.checked) {
+                    setTimeout(stopEngine, 1000);
+                }
+
+            }, (backswingDuration + downswingDuration) * 1000);
+        }
+
+        playBtn.addEventListener('click', () => {
+            if (isRunning) {
+                stopEngine();
+                return;
+            }
+
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (synth.getVoices().length === 0) synth.speak(new SpeechSynthesisUtterance(""));
+
+            isRunning = true;
+            playBtn.textContent = "STOP";
+            playBtn.classList.replace('bg-blue-600', 'bg-red-600');
+            playBtn.classList.replace('hover:bg-blue-700', 'hover:bg-red-700');
+
+            if (loopToggle.checked) {
+                startDelaySequence();
+            } else {
+                executeSwingSequence();
+            }
+        });
+    </script>
+</body>
+</html>
