@@ -51,19 +51,19 @@
         <div class="space-y-4">
             <div class="grid grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Tempo</label>
+                    <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Tempo (Ratio)</label>
                     <select id="tempo-select" class="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <option value="3">3:1 (Full)</option>
-                        <option value="2">2:1 (Short)</option>
+                        <option value="3">3:1 (Full Swing)</option>
+                        <option value="2">2:1 (Short Game)</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Vibe</label>
+                    <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Audio Vibe</label>
                     <select id="vibe-select" class="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <option value="speak_ernie">Ernie Els</option>
-                        <option value="speak_potato">One Potato</option>
-                        <option value="arcade">Arcade</option>
-                        <option value="zen">Zen</option>
+                        <option value="classic">Classic Metronome</option>
+                        <option value="glock">Glockenspiel</option>
+                        <option value="snare">Percussion Snap</option>
+                        <option value="zen">Zen Bow</option>
                     </select>
                 </div>
             </div>
@@ -85,16 +85,18 @@
 
             <div id="delay-container" class="opacity-50 pointer-events-none transition-opacity">
                 <div class="flex justify-between mb-1">
-                    <label class="text-xs font-medium text-gray-500 dark:text-gray-400">Setup Delay Between Swings</label>
+                    <label class="text-xs font-medium text-gray-500 dark:text-gray-400">Setup Delay Between Loops</label>
                     <span id="delay-display" class="text-xs text-blue-600 dark:text-blue-400 font-bold">8s</span>
                 </div>
                 <input type="range" id="delay-slider" min="3" max="20" step="1" value="8" class="w-full accent-blue-500">
             </div>
         </div>
 
-        <button id="play-btn" class="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition-colors text-lg uppercase tracking-widest">
+        <button id="play-btn" class="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition-colors text-lg uppercase tracking-widest relative">
             START
         </button>
+        
+        <p class="text-center text-[10px] text-gray-400 dark:text-gray-600 mt-4 tracking-wider">v1.4</p>
     </div>
 
     <script>
@@ -106,7 +108,6 @@
         }
 
         let audioCtx;
-        const synth = window.speechSynthesis;
 
         // UI Elements
         const playBtn = document.getElementById('play-btn');
@@ -131,17 +132,14 @@
         let countdownIntervalId = null;
         let swingCount = 0;
 
-        // Theme Toggle Logic
+        // Theme Toggle
         themeToggle.addEventListener('click', () => {
             document.documentElement.classList.toggle('dark');
-            if (document.documentElement.classList.contains('dark')) {
-                themeToggle.textContent = '☀️ Outdoor';
-            } else {
-                themeToggle.textContent = '🌙 Dark';
-            }
+            if (document.documentElement.classList.contains('dark')) themeToggle.textContent = '☀️ Outdoor';
+            else themeToggle.textContent = '🌙 Dark';
         });
 
-        // UI Listeners
+        // UI Sliders
         speedSlider.addEventListener('input', (e) => speedDisplay.textContent = `${e.target.value}s`);
         delaySlider.addEventListener('input', (e) => delayDisplay.textContent = `${e.target.value}s`);
         
@@ -150,36 +148,77 @@
             else delayContainer.classList.add('opacity-50', 'pointer-events-none');
         });
 
-        function playTone(freq, type, startTime, duration, isImpact = false) {
+        // Enhanced Synthesis Engine
+        function playSynthesizedTone(vibeType, startTime, duration, beatNumber) {
             if (!audioCtx) return;
+            
             const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = type;
-            osc.frequency.setValueAtTime(freq, startTime);
-            if (isImpact && type === 'square') osc.frequency.exponentialRampToValueAtTime(freq / 2, startTime + duration);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            gain.gain.setValueAtTime(0, startTime);
-            gain.gain.linearRampToValueAtTime(1, startTime + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-            osc.start(startTime);
-            osc.stop(startTime + duration);
-        }
+            const gainNode = audioCtx.createGain();
+            let isImpact = (beatNumber === 3);
 
-        function speakWord(word) {
-            if (!word) return;
-            synth.cancel(); 
-            const utterance = new SpeechSynthesisUtterance(word);
-            utterance.rate = 2.0; 
-            utterance.pitch = 1.2;
-            synth.speak(utterance);
+            let freq = 800;
+            let oscType = 'sine';
+            let decay = 0.1;
+            let sustain = 0.001;
+
+            if (vibeType === 'classic') {
+                freq = isImpact ? 1600 : 800; // Sharp beep, high pitch impact
+                oscType = 'triangle'; // Woodblock feel
+                decay = 0.05; // Very short
+            } else if (vibeType === 'glock') {
+                freq = isImpact ? 2600 : 2000; // High frequency metal
+                oscType = 'sine';
+                decay = 0.6; // Longer sustain
+                sustain = 0.1;
+            } else if (vibeType === 'snare') {
+                if (isImpact) {
+                    // Impact: Filtered Noise for a snare crack
+                    const bufferSize = audioCtx.sampleRate * 0.1;
+                    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                    const output = buffer.getChannelData(0);
+                    for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+                    
+                    const noise = audioCtx.createBufferSource();
+                    noise.buffer = buffer;
+                    const filter = audioCtx.createBiquadFilter();
+                    filter.type = "highpass";
+                    filter.frequency.setValueAtTime(1000, startTime);
+                    noise.connect(filter).connect(gainNode);
+                    noise.start(startTime);
+                    
+                    gainNode.gain.setValueAtTime(1, startTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.1);
+                    noise.stop(startTime + 0.1);
+                    return; // Short circuit noise path
+                } else {
+                    freq = 600; // Lower wood crack for takeaway/top
+                    oscType = 'square';
+                    decay = 0.03;
+                }
+            } else if (vibeType === 'zen') {
+                freq = beatNumber === 1 ? 440 : (beatNumber === 2 ? 660 : 220); // A4, E5, A3
+                oscType = 'sine';
+                decay = 1.0;
+                sustain = 0.2;
+            }
+
+            osc.type = oscType;
+            osc.frequency.setValueAtTime(freq, startTime);
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(1, startTime + 0.01);
+            gainNode.gain.exponentialRampToValueAtTime(sustain, startTime + decay);
+            
+            osc.start(startTime);
+            osc.stop(startTime + decay);
         }
 
         function stopEngine() {
             isRunning = false;
             clearTimeout(loopTimeoutId);
             clearInterval(countdownIntervalId);
-            synth.cancel();
             
             playBtn.textContent = "START";
             playBtn.classList.replace('bg-red-600', 'bg-blue-600');
@@ -199,17 +238,11 @@
             coreCircle.className = "w-24 h-24 bg-gray-500 rounded-full z-10 flex items-center justify-center shadow-lg";
 
             countdownIntervalId = setInterval(() => {
-                if (!isRunning) {
-                    clearInterval(countdownIntervalId);
-                    return;
-                }
+                if (!isRunning) { clearInterval(countdownIntervalId); return; }
                 timeLeft--;
-                
                 if (timeLeft > 0) {
                     swingStateText.textContent = `${timeLeft}s`;
-                    if (timeLeft <= 3) {
-                        playTone(1000, 'sine', audioCtx.currentTime, 0.05);
-                    }
+                    if (timeLeft <= 3) playSynthesizedTone('classic', audioCtx.currentTime, 0.05, 1);
                 } else {
                     clearInterval(countdownIntervalId);
                     executeSwingSequence();
@@ -231,27 +264,12 @@
             const topOfSwingTime = now + backswingDuration;
             const impactTime = topOfSwingTime + downswingDuration;
 
-            if (vibe.startsWith('speak_')) {
-                let w1, w2, w3;
-                if (vibe === 'speak_potato') { w1 = "One"; w2 = "Potato"; w3 = "Two"; }
-                else if (vibe === 'speak_marcy') { w1 = "Marcy"; w2 = "My"; w3 = "Dear"; }
-                else if (vibe === 'speak_ernie') { w1 = "Ernie"; w2 = ""; w3 = "Els"; }
+            // Synthesis Dispatch
+            playSynthesizedTone(vibe, now, 0, 1); // Beat 1
+            playSynthesizedTone(vibe, topOfSwingTime, 0, 2); // Beat 2
+            playSynthesizedTone(vibe, impactTime, 0, 3); // Beat 3
 
-                speakWord(w1);
-                setTimeout(() => { if(isRunning) speakWord(w2) }, backswingDuration * 1000);
-                setTimeout(() => { if(isRunning) speakWord(w3) }, (backswingDuration + downswingDuration) * 1000);
-            } else {
-                if (vibe === 'arcade') {
-                    playTone(300, 'square', now, 0.4);
-                    playTone(450, 'square', topOfSwingTime, 0.4);
-                    playTone(150, 'square', impactTime, 0.6, true);
-                } else if (vibe === 'zen') {
-                    playTone(440, 'sine', now, 1.0);
-                    playTone(554.37, 'sine', topOfSwingTime, 1.0);
-                    playTone(329.63, 'sine', impactTime, 2.0);
-                }
-            }
-
+            // Visual Logic
             swingStateText.textContent = "BACK";
             coreCircle.style.transform = "scale(0.8)";
             coreCircle.className = "w-24 h-24 bg-purple-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
@@ -270,8 +288,7 @@
                 coreCircle.classList.replace('bg-yellow-500', 'bg-green-500');
                 
                 ring.classList.remove('hidden');
-                ring.style.animation = "none";
-                void ring.offsetWidth; 
+                ring.style.animation = "none"; void ring.offsetWidth; 
                 ring.style.animation = "expand 0.5s ease-out forwards";
 
                 swingCount++;
@@ -282,30 +299,22 @@
                 } else if (!loopToggle.checked) {
                     setTimeout(stopEngine, 1000);
                 }
-
             }, (backswingDuration + downswingDuration) * 1000);
         }
 
         playBtn.addEventListener('click', () => {
-            if (isRunning) {
-                stopEngine();
-                return;
-            }
+            if (isRunning) { stopEngine(); return; }
 
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') audioCtx.resume();
-            if (synth.getVoices().length === 0) synth.speak(new SpeechSynthesisUtterance(""));
 
             isRunning = true;
             playBtn.textContent = "STOP";
             playBtn.classList.replace('bg-blue-600', 'bg-red-600');
             playBtn.classList.replace('hover:bg-blue-700', 'hover:bg-red-700');
 
-            if (loopToggle.checked) {
-                startDelaySequence();
-            } else {
-                executeSwingSequence();
-            }
+            if (loopToggle.checked) startDelaySequence();
+            else executeSwingSequence();
         });
     </script>
 </body>
