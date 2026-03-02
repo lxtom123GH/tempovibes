@@ -64,8 +64,11 @@
                     <label class="block text-xs font-medium mb-1 text-gray-600 dark:text-gray-300">Audio Vibe</label>
                     <select id="vibe-select" class="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="classic">Classic Metronome</option>
-                        <option value="glock">Glockenspiel</option>
+                        <option value="glock">Glockenspiel (Low)</option>
                         <option value="snare">Percussion Snap</option>
+                        <option value="marimba">Marimba Wood</option>
+                        <option value="bass">Deep Heartbeat</option>
+                        <option value="scifi">Sci-Fi Laser</option>
                         <option value="zen">Zen Bow</option>
                     </select>
                 </div>
@@ -99,7 +102,7 @@
             START
         </button>
         
-        <p class="text-center text-[10px] text-gray-400 dark:text-gray-500 mt-4 tracking-wider">v1.5</p>
+        <p class="text-center text-[10px] text-gray-400 dark:text-gray-500 mt-4 tracking-wider">v1.6</p>
     </div>
 
     <script>
@@ -158,12 +161,30 @@
             else delayContainer.classList.add('opacity-50', 'pointer-events-none');
         });
 
+        // Dedicated subtle countdown tick (distinct from swing vibes)
+        function playCountdownTick(startTime) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(1000, startTime);
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(0.1, startTime + 0.005);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.05);
+            osc.start(startTime);
+            osc.stop(startTime + 0.05);
+        }
+
         // Enhanced Synthesis Engine
         function playSynthesizedTone(vibeType, startTime, duration, beatNumber) {
             if (!audioCtx) return;
             
             const osc = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
+            gainNode.connect(audioCtx.destination); // Connect up front so noises don't break
+            
             let isImpact = (beatNumber === 3);
 
             let freq = 800;
@@ -172,17 +193,17 @@
             let sustain = 0.001;
 
             if (vibeType === 'classic') {
-                freq = isImpact ? 1600 : 800; 
+                freq = isImpact ? 1200 : 800; 
                 oscType = 'triangle'; 
-                decay = 0.05; 
+                decay = 0.08; 
             } else if (vibeType === 'glock') {
-                freq = isImpact ? 2600 : 2000; 
+                freq = isImpact ? 1500 : 1000; // Lowered pitches
                 oscType = 'sine';
                 decay = 0.6; 
                 sustain = 0.1;
             } else if (vibeType === 'snare') {
                 if (isImpact) {
-                    const bufferSize = audioCtx.sampleRate * 0.1;
+                    const bufferSize = audioCtx.sampleRate * 0.15;
                     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
                     const output = buffer.getChannelData(0);
                     for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
@@ -191,19 +212,43 @@
                     noise.buffer = buffer;
                     const filter = audioCtx.createBiquadFilter();
                     filter.type = "highpass";
-                    filter.frequency.setValueAtTime(1000, startTime);
+                    filter.frequency.setValueAtTime(800, startTime);
                     noise.connect(filter).connect(gainNode);
                     noise.start(startTime);
                     
-                    gainNode.gain.setValueAtTime(1, startTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.1);
-                    noise.stop(startTime + 0.1);
-                    return; 
+                    gainNode.gain.setValueAtTime(0, startTime);
+                    gainNode.gain.linearRampToValueAtTime(1, startTime + 0.01);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.15);
+                    noise.stop(startTime + 0.15);
+                    return; // Fixed!
                 } else {
-                    freq = 600; 
+                    freq = 400; 
                     oscType = 'square';
                     decay = 0.03;
                 }
+            } else if (vibeType === 'marimba') {
+                freq = isImpact ? 600 : 400; 
+                oscType = 'sine';
+                decay = 0.2;
+                
+                // Add a tiny 'thwack' to the mallet strike
+                const clickOsc = audioCtx.createOscillator();
+                clickOsc.type = 'triangle';
+                clickOsc.frequency.setValueAtTime(freq*2, startTime);
+                clickOsc.connect(gainNode);
+                clickOsc.start(startTime);
+                clickOsc.stop(startTime + 0.02);
+                
+            } else if (vibeType === 'bass') {
+                freq = isImpact ? 100 : 65; 
+                oscType = 'sine';
+                decay = 0.3;
+            } else if (vibeType === 'scifi') {
+                freq = isImpact ? 800 : 400; 
+                oscType = 'sawtooth';
+                decay = 0.2;
+                osc.frequency.setValueAtTime(freq, startTime);
+                osc.frequency.exponentialRampToValueAtTime(freq / 2, startTime + decay); // Pitch drop
             } else if (vibeType === 'zen') {
                 freq = beatNumber === 1 ? 440 : (beatNumber === 2 ? 660 : 220); 
                 oscType = 'sine';
@@ -212,9 +257,10 @@
             }
 
             osc.type = oscType;
-            osc.frequency.setValueAtTime(freq, startTime);
+            if (vibeType !== 'scifi') {
+                osc.frequency.setValueAtTime(freq, startTime);
+            }
             osc.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
             
             gainNode.gain.setValueAtTime(0, startTime);
             gainNode.gain.linearRampToValueAtTime(1, startTime + 0.01);
@@ -251,7 +297,7 @@
                 timeLeft--;
                 if (timeLeft > 0) {
                     swingStateText.textContent = `${timeLeft}s`;
-                    if (timeLeft <= 3) playSynthesizedTone('classic', audioCtx.currentTime, 0.05, 1);
+                    if (timeLeft <= 3) playCountdownTick(audioCtx.currentTime); // Now totally distinct!
                 } else {
                     clearInterval(countdownIntervalId);
                     executeSwingSequence();
