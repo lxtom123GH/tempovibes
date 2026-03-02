@@ -11,19 +11,16 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-        }
+        tailwind.config = { darkMode: 'class', }
     </script>
     <style>
         @keyframes expand {
-            0% { transform: scale(1); opacity: 0.5; }
+            0% { transform: scale(1); opacity: 0.8; }
             100% { transform: scale(3); opacity: 0; }
         }
         .visualizer-ring {
             position: absolute; width: 100px; height: 100px;
             border-radius: 50%; background: rgba(59, 130, 246, 0.5);
-            transition: all linear;
         }
     </style>
 </head>
@@ -86,10 +83,10 @@
 
             <div class="flex items-center justify-between mb-2">
                 <label class="text-sm font-medium text-blue-600 dark:text-blue-300">Enable Auto-Loop</label>
-                <input type="checkbox" id="loop-toggle" class="w-5 h-5 accent-blue-500 rounded">
+                <input type="checkbox" id="loop-toggle" class="w-5 h-5 accent-blue-500 rounded" checked>
             </div>
 
-            <div id="delay-container" class="opacity-50 pointer-events-none transition-opacity">
+            <div id="delay-container" class="transition-opacity">
                 <div class="flex justify-between mb-1">
                     <label class="text-xs font-medium text-gray-500 dark:text-gray-400">Setup Delay Between Loops</label>
                     <span id="delay-display" class="text-xs text-blue-600 dark:text-blue-400 font-bold">8s</span>
@@ -102,25 +99,18 @@
             START
         </button>
         
-        <p class="text-center text-[10px] text-gray-400 dark:text-gray-500 mt-4 tracking-wider">v1.7 (Background Sync)</p>
+        <p class="text-center text-[10px] text-gray-400 dark:text-gray-500 mt-4 tracking-wider">v1.8 (Native Track Renderer)</p>
     </div>
 
+    <audio id="native-audio-player" class="hidden" playsinline></audio>
+
     <script>
-        // PWA Service Worker Registration
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW failed:', err));
-            });
+            window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW failed:', err)); });
         }
 
-        let audioCtx;
+        const nativePlayer = document.getElementById('native-audio-player');
         
-        // Background Wake Lock Hack: A tiny silent WAV file encoded in Base64
-        const silentWav = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
-        const bgAudio = new Audio(silentWav);
-        bgAudio.loop = true;
-
-        // UI Elements
         const playBtn = document.getElementById('play-btn');
         const tempoSelect = document.getElementById('tempo-select');
         const speedSlider = document.getElementById('speed-slider');
@@ -138,81 +128,79 @@
         const resetCounterBtn = document.getElementById('reset-counter');
         const themeToggle = document.getElementById('theme-toggle');
 
-        // State Variables
-        let isRunning = false;
-        let loopTimeoutId = null;
-        let countdownIntervalId = null;
+        let isPlaying = false;
         let swingCount = 0;
+        let animationFrameId = null;
+        let lastVisualState = 'READY';
+        let currentObjectUrl = null;
 
-        // --- Media Session API (Apple Watch / Lock Screen Controls) ---
-        function setupMediaSession() {
-            if ('mediaSession' in navigator) {
-                navigator.mediaSession.metadata = new MediaMetadata({
-                    title: 'Golf Tempo Tracker',
-                    artist: 'Tempo Vibes',
-                    album: 'Practice Session',
-                    artwork: [
-                        { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-                        { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
-                    ]
-                });
+        // Visual Timings (calculated when Render is hit)
+        let vDelay = 0;
+        let vBackswing = 0;
+        let vDownswing = 0;
+        let vImpactTime = 0;
+        let vTotalDuration = 0;
 
-                // When user hits PLAY on Apple Watch or Lock Screen
-                navigator.mediaSession.setActionHandler('play', () => {
-                    if (!isRunning) playBtn.click();
-                });
-
-                // When user hits PAUSE on Apple Watch or Lock Screen
-                navigator.mediaSession.setActionHandler('pause', () => {
-                    if (isRunning) playBtn.click();
-                });
-            }
-        }
-
-        // Theme Toggle
         themeToggle.addEventListener('click', () => {
             document.documentElement.classList.toggle('dark');
             if (document.documentElement.classList.contains('dark')) themeToggle.textContent = '☀️ Outdoor';
             else themeToggle.textContent = '🌙 Dark';
         });
 
-        // Reset Counter
-        resetCounterBtn.addEventListener('click', () => {
-            swingCount = 0;
-            swingCounterDisplay.textContent = swingCount;
-        });
-
-        // UI Sliders
+        resetCounterBtn.addEventListener('click', () => { swingCount = 0; swingCounterDisplay.textContent = swingCount; });
         speedSlider.addEventListener('input', (e) => speedDisplay.textContent = `${e.target.value}s`);
         delaySlider.addEventListener('input', (e) => delayDisplay.textContent = `${e.target.value}s`);
-        
         loopToggle.addEventListener('change', (e) => {
             if (e.target.checked) delayContainer.classList.remove('opacity-50', 'pointer-events-none');
             else delayContainer.classList.add('opacity-50', 'pointer-events-none');
         });
 
-        function playCountdownTick(startTime) {
-            if (!audioCtx) return;
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            osc.type = 'square';
-            osc.frequency.setValueAtTime(1000, startTime);
-            osc.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            gainNode.gain.setValueAtTime(0, startTime);
-            gainNode.gain.linearRampToValueAtTime(0.1, startTime + 0.005);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.05);
-            osc.start(startTime);
-            osc.stop(startTime + 0.05);
+        // --- THE DYNAMIC TRACK RENDERER ---
+        
+        // 1. Convert AudioBuffer to WAV format directly in the browser
+        function audioBufferToWav(buffer) {
+            const numOfChan = buffer.numberOfChannels;
+            const length = buffer.length * numOfChan * 2 + 44;
+            const arrayBuffer = new ArrayBuffer(length);
+            const view = new DataView(arrayBuffer);
+            const channels = [];
+            let i, sample, offset = 0, pos = 0;
+
+            function setUint16(data) { view.setUint16(pos, data, true); pos += 2; }
+            function setUint32(data) { view.setUint32(pos, data, true); pos += 4; }
+
+            setUint32(0x46464952); // "RIFF"
+            setUint32(length - 8); 
+            setUint32(0x45564157); // "WAVE"
+            setUint32(0x20746d66); // "fmt "
+            setUint32(16); 
+            setUint16(1); 
+            setUint16(numOfChan);
+            setUint32(buffer.sampleRate);
+            setUint32(buffer.sampleRate * 2 * numOfChan); 
+            setUint16(numOfChan * 2); 
+            setUint16(16); 
+            setUint32(0x61746164); // "data"
+            setUint32(length - pos - 4); 
+
+            for (i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
+            while (pos < length) {
+                for (i = 0; i < numOfChan; i++) {
+                    sample = Math.max(-1, Math.min(1, channels[i][offset]));
+                    sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+                    view.setInt16(pos, sample, true);
+                    pos += 2;
+                }
+                offset++;
+            }
+            return new Blob([arrayBuffer], { type: "audio/wav" });
         }
 
-        // Enhanced Synthesis Engine
-        function playSynthesizedTone(vibeType, startTime, duration, beatNumber) {
-            if (!audioCtx) return;
-            
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            gainNode.connect(audioCtx.destination); 
+        // 2. Synthesize Tone inside the Offline Context
+        function buildTone(ctx, vibeType, startTime, duration, beatNumber) {
+            const osc = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            gainNode.connect(ctx.destination); 
             
             let isImpact = (beatNumber === 3);
             let freq = 800; let oscType = 'sine'; let decay = 0.1; let sustain = 0.001;
@@ -223,14 +211,14 @@
                 freq = isImpact ? 1500 : 1000; oscType = 'sine'; decay = 0.6; sustain = 0.1;
             } else if (vibeType === 'snare') {
                 if (isImpact) {
-                    const bufferSize = audioCtx.sampleRate * 0.15;
-                    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                    const bufferSize = ctx.sampleRate * 0.15;
+                    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
                     const output = buffer.getChannelData(0);
                     for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
                     
-                    const noise = audioCtx.createBufferSource();
+                    const noise = ctx.createBufferSource();
                     noise.buffer = buffer;
-                    const filter = audioCtx.createBiquadFilter();
+                    const filter = ctx.createBiquadFilter();
                     filter.type = "highpass"; filter.frequency.setValueAtTime(800, startTime);
                     noise.connect(filter).connect(gainNode);
                     noise.start(startTime);
@@ -245,7 +233,7 @@
                 }
             } else if (vibeType === 'marimba') {
                 freq = isImpact ? 600 : 400; oscType = 'sine'; decay = 0.2;
-                const clickOsc = audioCtx.createOscillator();
+                const clickOsc = ctx.createOscillator();
                 clickOsc.type = 'triangle'; clickOsc.frequency.setValueAtTime(freq*2, startTime);
                 clickOsc.connect(gainNode); clickOsc.start(startTime); clickOsc.stop(startTime + 0.02);
             } else if (vibeType === 'bass') {
@@ -269,114 +257,169 @@
             osc.stop(startTime + decay);
         }
 
-        function stopEngine() {
-            isRunning = false;
-            clearTimeout(loopTimeoutId);
-            clearInterval(countdownIntervalId);
-            
-            // Stop the silent background audio and update Lock Screen status
-            bgAudio.pause();
-            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-            
-            playBtn.textContent = "START";
-            playBtn.classList.replace('bg-red-600', 'bg-blue-600');
-            playBtn.classList.replace('hover:bg-red-700', 'hover:bg-blue-700');
-            
-            swingStateText.textContent = "READY";
-            coreCircle.style.transform = "scale(1)";
-            coreCircle.className = "w-24 h-24 bg-blue-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
-            ring.classList.add('hidden');
-            ring.style.animation = "";
+        function buildTick(ctx, startTime) {
+            const osc = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(1000, startTime);
+            osc.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(0.1, startTime + 0.005);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.05);
+            osc.start(startTime);
+            osc.stop(startTime + 0.05);
         }
 
-        function startDelaySequence() {
-            if (!isRunning) return;
-            let timeLeft = parseInt(delaySlider.value);
-            swingStateText.textContent = `${timeLeft}s`;
-            coreCircle.className = "w-24 h-24 bg-gray-500 rounded-full z-10 flex items-center justify-center shadow-lg";
-
-            countdownIntervalId = setInterval(() => {
-                if (!isRunning) { clearInterval(countdownIntervalId); return; }
-                timeLeft--;
-                if (timeLeft > 0) {
-                    swingStateText.textContent = `${timeLeft}s`;
-                    if (timeLeft <= 3) playCountdownTick(audioCtx.currentTime); 
-                } else {
-                    clearInterval(countdownIntervalId);
-                    executeSwingSequence();
-                }
-            }, 1000);
-        }
-
-        function executeSwingSequence() {
-            if (!isRunning) return;
-
-            const totalTime = parseFloat(speedSlider.value);
-            const ratio = parseInt(tempoSelect.value); 
+        // 3. Render the entire track instantly into memory
+        async function generateAudioTrack() {
+            playBtn.textContent = "RENDERING...";
+            
+            const totalSwingTime = parseFloat(speedSlider.value);
+            const ratio = parseInt(tempoSelect.value);
             const vibe = vibeSelect.value;
+            const isLooping = loopToggle.checked;
+            const delayTime = isLooping ? parseInt(delaySlider.value) : 1; 
+
             const totalParts = ratio + 1;
-            const backswingDuration = totalTime * (ratio / totalParts);
-            const downswingDuration = totalTime * (1 / totalParts);
+            vBackswing = totalSwingTime * (ratio / totalParts);
+            vDownswing = totalSwingTime * (1 / totalParts);
+            vDelay = delayTime;
+            vImpactTime = vDelay + vBackswing + vDownswing;
+            
+            // Allow 1 second of audio tail after impact so chords ring out
+            vTotalDuration = vImpactTime + 1.0; 
 
-            const now = audioCtx.currentTime;
-            const topOfSwingTime = now + backswingDuration;
-            const impactTime = topOfSwingTime + downswingDuration;
+            const sampleRate = 44100;
+            const offlineCtx = new OfflineAudioContext(1, sampleRate * vTotalDuration, sampleRate);
 
-            playSynthesizedTone(vibe, now, 0, 1); 
-            playSynthesizedTone(vibe, topOfSwingTime, 0, 2); 
-            playSynthesizedTone(vibe, impactTime, 0, 3); 
+            // Schedule Ticks (3, 2, 1 before the swing)
+            if (delayTime >= 3) {
+                buildTick(offlineCtx, delayTime - 3);
+                buildTick(offlineCtx, delayTime - 2);
+                buildTick(offlineCtx, delayTime - 1);
+            }
 
-            swingStateText.textContent = "BACK";
-            coreCircle.style.transform = "scale(0.8)";
-            coreCircle.className = "w-24 h-24 bg-purple-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+            // Schedule the Swing
+            buildTone(offlineCtx, vibe, vDelay, 0, 1); // Start
+            buildTone(offlineCtx, vibe, vDelay + vBackswing, 0, 2); // Top
+            buildTone(offlineCtx, vibe, vImpactTime, 0, 3); // Impact
 
-            setTimeout(() => {
-                if (!isRunning) return;
-                swingStateText.textContent = "TOP";
-                coreCircle.style.transform = "scale(1.2)";
-                coreCircle.classList.replace('bg-purple-500', 'bg-yellow-500');
-            }, backswingDuration * 1000);
+            // Render and Export
+            const renderedBuffer = await offlineCtx.startRendering();
+            const wavBlob = audioBufferToWav(renderedBuffer);
+            
+            if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+            currentObjectUrl = URL.createObjectURL(wavBlob);
+            
+            nativePlayer.src = currentObjectUrl;
+            nativePlayer.loop = isLooping;
+        }
 
-            setTimeout(() => {
-                if (!isRunning) return;
-                swingStateText.textContent = "IMPACT!";
+        // --- VISUAL SYNC ENGINE ---
+        // This watches the native audio player and updates the screen ONLY when it's on
+        function syncVisuals() {
+            if (!isPlaying) return;
+
+            const t = nativePlayer.currentTime;
+            let newState = '';
+
+            // 1. Setup Phase
+            if (t < vDelay) {
+                let timeLeft = Math.ceil(vDelay - t);
+                newState = `SETUP`;
+                swingStateText.textContent = `${timeLeft}s`;
+                coreCircle.className = "w-24 h-24 bg-gray-500 rounded-full z-10 flex items-center justify-center shadow-lg";
                 coreCircle.style.transform = "scale(1)";
-                coreCircle.classList.replace('bg-yellow-500', 'bg-green-500');
-                
+            } 
+            // 2. Backswing Phase
+            else if (t >= vDelay && t < (vDelay + vBackswing)) {
+                newState = 'BACK';
+                swingStateText.textContent = "BACK";
+                coreCircle.className = "w-24 h-24 bg-purple-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+                coreCircle.style.transform = "scale(0.8)";
+            } 
+            // 3. Top of Swing Phase
+            else if (t >= (vDelay + vBackswing) && t < vImpactTime) {
+                newState = 'TOP';
+                swingStateText.textContent = "TOP";
+                coreCircle.className = "w-24 h-24 bg-yellow-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+                coreCircle.style.transform = "scale(1.2)";
+            } 
+            // 4. Follow Through / Impact Phase
+            else if (t >= vImpactTime) {
+                newState = 'IMPACT';
+                swingStateText.textContent = "IMPACT!";
+                coreCircle.className = "w-24 h-24 bg-green-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+                coreCircle.style.transform = "scale(1)";
+            }
+
+            // Detect Impact Transition to trigger animations and counter
+            if (lastVisualState !== 'IMPACT' && newState === 'IMPACT') {
                 ring.classList.remove('hidden');
                 ring.style.animation = "none"; void ring.offsetWidth; 
                 ring.style.animation = "expand 0.5s ease-out forwards";
-
+                
                 swingCount++;
                 swingCounterDisplay.textContent = swingCount;
+            }
 
-                if (loopToggle.checked && isRunning) {
-                    loopTimeoutId = setTimeout(startDelaySequence, 1000); 
-                } else if (!loopToggle.checked) {
-                    setTimeout(stopEngine, 1000);
-                }
-            }, (backswingDuration + downswingDuration) * 1000);
+            lastVisualState = newState;
+            animationFrameId = requestAnimationFrame(syncVisuals);
         }
 
-        playBtn.addEventListener('click', () => {
-            if (isRunning) { stopEngine(); return; }
+        // --- CONTROLS ---
+        async function togglePlay() {
+            if (isPlaying) {
+                nativePlayer.pause();
+                isPlaying = false;
+                cancelAnimationFrame(animationFrameId);
+                
+                playBtn.textContent = "START";
+                playBtn.classList.replace('bg-red-600', 'bg-blue-600');
+                playBtn.classList.replace('hover:bg-red-700', 'hover:bg-blue-700');
+                
+                swingStateText.textContent = "READY";
+                coreCircle.className = "w-24 h-24 bg-blue-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
+                coreCircle.style.transform = "scale(1)";
+                ring.classList.add('hidden');
+                ring.style.animation = "";
+                lastVisualState = 'READY';
+                
+                if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+            } else {
+                await generateAudioTrack();
+                
+                nativePlayer.play();
+                isPlaying = true;
+                
+                playBtn.textContent = "STOP";
+                playBtn.classList.replace('bg-blue-600', 'bg-red-600');
+                playBtn.classList.replace('hover:bg-blue-700', 'hover:bg-red-700');
 
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            
-            // Start the silent background audio and set Lock Screen status
-            bgAudio.play().catch(e => console.log("Background audio blocked until user interaction", e));
-            setupMediaSession();
-            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+                // Apple Watch / Lock Screen Meta
+                if ('mediaSession' in navigator) {
+                    navigator.mediaSession.metadata = new MediaMetadata({
+                        title: `${parseInt(tempoSelect.value)}:1 Tempo Loop`,
+                        artist: 'Golf Vibes PWA',
+                        artwork: [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }]
+                    });
+                    navigator.mediaSession.setActionHandler('play', togglePlay);
+                    navigator.mediaSession.setActionHandler('pause', togglePlay);
+                    navigator.mediaSession.playbackState = 'playing';
+                }
 
-            isRunning = true;
-            playBtn.textContent = "STOP";
-            playBtn.classList.replace('bg-blue-600', 'bg-red-600');
-            playBtn.classList.replace('hover:bg-blue-700', 'hover:bg-red-700');
+                animationFrameId = requestAnimationFrame(syncVisuals);
+            }
+        }
 
-            if (loopToggle.checked) startDelaySequence();
-            else executeSwingSequence();
+        playBtn.addEventListener('click', togglePlay);
+        
+        // Single shot auto-stop logic
+        nativePlayer.addEventListener('ended', () => {
+            if (!loopToggle.checked && isPlaying) togglePlay();
         });
+
     </script>
 </body>
 </html>
