@@ -102,7 +102,7 @@
             START
         </button>
         
-        <p class="text-center text-[10px] text-gray-400 dark:text-gray-500 mt-4 tracking-wider">v1.6</p>
+        <p class="text-center text-[10px] text-gray-400 dark:text-gray-500 mt-4 tracking-wider">v1.7 (Background Sync)</p>
     </div>
 
     <script>
@@ -114,6 +114,11 @@
         }
 
         let audioCtx;
+        
+        // Background Wake Lock Hack: A tiny silent WAV file encoded in Base64
+        const silentWav = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+        const bgAudio = new Audio(silentWav);
+        bgAudio.loop = true;
 
         // UI Elements
         const playBtn = document.getElementById('play-btn');
@@ -139,6 +144,31 @@
         let countdownIntervalId = null;
         let swingCount = 0;
 
+        // --- Media Session API (Apple Watch / Lock Screen Controls) ---
+        function setupMediaSession() {
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: 'Golf Tempo Tracker',
+                    artist: 'Tempo Vibes',
+                    album: 'Practice Session',
+                    artwork: [
+                        { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+                        { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
+                    ]
+                });
+
+                // When user hits PLAY on Apple Watch or Lock Screen
+                navigator.mediaSession.setActionHandler('play', () => {
+                    if (!isRunning) playBtn.click();
+                });
+
+                // When user hits PAUSE on Apple Watch or Lock Screen
+                navigator.mediaSession.setActionHandler('pause', () => {
+                    if (isRunning) playBtn.click();
+                });
+            }
+        }
+
         // Theme Toggle
         themeToggle.addEventListener('click', () => {
             document.documentElement.classList.toggle('dark');
@@ -161,7 +191,6 @@
             else delayContainer.classList.add('opacity-50', 'pointer-events-none');
         });
 
-        // Dedicated subtle countdown tick (distinct from swing vibes)
         function playCountdownTick(startTime) {
             if (!audioCtx) return;
             const osc = audioCtx.createOscillator();
@@ -183,24 +212,15 @@
             
             const osc = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
-            gainNode.connect(audioCtx.destination); // Connect up front so noises don't break
+            gainNode.connect(audioCtx.destination); 
             
             let isImpact = (beatNumber === 3);
-
-            let freq = 800;
-            let oscType = 'sine';
-            let decay = 0.1;
-            let sustain = 0.001;
+            let freq = 800; let oscType = 'sine'; let decay = 0.1; let sustain = 0.001;
 
             if (vibeType === 'classic') {
-                freq = isImpact ? 1200 : 800; 
-                oscType = 'triangle'; 
-                decay = 0.08; 
+                freq = isImpact ? 1200 : 800; oscType = 'triangle'; decay = 0.08; 
             } else if (vibeType === 'glock') {
-                freq = isImpact ? 1500 : 1000; // Lowered pitches
-                oscType = 'sine';
-                decay = 0.6; 
-                sustain = 0.1;
+                freq = isImpact ? 1500 : 1000; oscType = 'sine'; decay = 0.6; sustain = 0.1;
             } else if (vibeType === 'snare') {
                 if (isImpact) {
                     const bufferSize = audioCtx.sampleRate * 0.15;
@@ -211,8 +231,7 @@
                     const noise = audioCtx.createBufferSource();
                     noise.buffer = buffer;
                     const filter = audioCtx.createBiquadFilter();
-                    filter.type = "highpass";
-                    filter.frequency.setValueAtTime(800, startTime);
+                    filter.type = "highpass"; filter.frequency.setValueAtTime(800, startTime);
                     noise.connect(filter).connect(gainNode);
                     noise.start(startTime);
                     
@@ -220,52 +239,32 @@
                     gainNode.gain.linearRampToValueAtTime(1, startTime + 0.01);
                     gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + 0.15);
                     noise.stop(startTime + 0.15);
-                    return; // Fixed!
+                    return; 
                 } else {
-                    freq = 400; 
-                    oscType = 'square';
-                    decay = 0.03;
+                    freq = 400; oscType = 'square'; decay = 0.03;
                 }
             } else if (vibeType === 'marimba') {
-                freq = isImpact ? 600 : 400; 
-                oscType = 'sine';
-                decay = 0.2;
-                
-                // Add a tiny 'thwack' to the mallet strike
+                freq = isImpact ? 600 : 400; oscType = 'sine'; decay = 0.2;
                 const clickOsc = audioCtx.createOscillator();
-                clickOsc.type = 'triangle';
-                clickOsc.frequency.setValueAtTime(freq*2, startTime);
-                clickOsc.connect(gainNode);
-                clickOsc.start(startTime);
-                clickOsc.stop(startTime + 0.02);
-                
+                clickOsc.type = 'triangle'; clickOsc.frequency.setValueAtTime(freq*2, startTime);
+                clickOsc.connect(gainNode); clickOsc.start(startTime); clickOsc.stop(startTime + 0.02);
             } else if (vibeType === 'bass') {
-                freq = isImpact ? 100 : 65; 
-                oscType = 'sine';
-                decay = 0.3;
+                freq = isImpact ? 100 : 65; oscType = 'sine'; decay = 0.3;
             } else if (vibeType === 'scifi') {
-                freq = isImpact ? 800 : 400; 
-                oscType = 'sawtooth';
-                decay = 0.2;
+                freq = isImpact ? 800 : 400; oscType = 'sawtooth'; decay = 0.2;
                 osc.frequency.setValueAtTime(freq, startTime);
-                osc.frequency.exponentialRampToValueAtTime(freq / 2, startTime + decay); // Pitch drop
+                osc.frequency.exponentialRampToValueAtTime(freq / 2, startTime + decay); 
             } else if (vibeType === 'zen') {
                 freq = beatNumber === 1 ? 440 : (beatNumber === 2 ? 660 : 220); 
-                oscType = 'sine';
-                decay = 1.0;
-                sustain = 0.2;
+                oscType = 'sine'; decay = 1.0; sustain = 0.2;
             }
 
             osc.type = oscType;
-            if (vibeType !== 'scifi') {
-                osc.frequency.setValueAtTime(freq, startTime);
-            }
+            if (vibeType !== 'scifi') osc.frequency.setValueAtTime(freq, startTime);
             osc.connect(gainNode);
-            
             gainNode.gain.setValueAtTime(0, startTime);
             gainNode.gain.linearRampToValueAtTime(1, startTime + 0.01);
             gainNode.gain.exponentialRampToValueAtTime(sustain, startTime + decay);
-            
             osc.start(startTime);
             osc.stop(startTime + decay);
         }
@@ -274,6 +273,10 @@
             isRunning = false;
             clearTimeout(loopTimeoutId);
             clearInterval(countdownIntervalId);
+            
+            // Stop the silent background audio and update Lock Screen status
+            bgAudio.pause();
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
             
             playBtn.textContent = "START";
             playBtn.classList.replace('bg-red-600', 'bg-blue-600');
@@ -297,7 +300,7 @@
                 timeLeft--;
                 if (timeLeft > 0) {
                     swingStateText.textContent = `${timeLeft}s`;
-                    if (timeLeft <= 3) playCountdownTick(audioCtx.currentTime); // Now totally distinct!
+                    if (timeLeft <= 3) playCountdownTick(audioCtx.currentTime); 
                 } else {
                     clearInterval(countdownIntervalId);
                     executeSwingSequence();
@@ -319,12 +322,10 @@
             const topOfSwingTime = now + backswingDuration;
             const impactTime = topOfSwingTime + downswingDuration;
 
-            // Synthesis Dispatch
             playSynthesizedTone(vibe, now, 0, 1); 
             playSynthesizedTone(vibe, topOfSwingTime, 0, 2); 
             playSynthesizedTone(vibe, impactTime, 0, 3); 
 
-            // Visual Logic
             swingStateText.textContent = "BACK";
             coreCircle.style.transform = "scale(0.8)";
             coreCircle.className = "w-24 h-24 bg-purple-500 rounded-full z-10 flex items-center justify-center shadow-lg transition-transform duration-100";
@@ -362,6 +363,11 @@
 
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            // Start the silent background audio and set Lock Screen status
+            bgAudio.play().catch(e => console.log("Background audio blocked until user interaction", e));
+            setupMediaSession();
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
 
             isRunning = true;
             playBtn.textContent = "STOP";
